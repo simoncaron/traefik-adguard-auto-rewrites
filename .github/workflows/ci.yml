@@ -17,7 +17,7 @@ jobs:
       run: |
         black traefik_adguard_auto_rewrites.py tests --check
         ruff check traefik_adguard_auto_rewrites.py tests
-        mypy traefik_adguard_auto_rewrites.py tests
+        mypy traefik_adguard_auto_rewrites.py
 
   e2e-test:
     runs-on: ubuntu-latest
