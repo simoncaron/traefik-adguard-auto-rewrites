@@ -1,0 +1,33 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+    - name: Install Python dependencies
+      run: pip install -r dev-requirements.txt
+    - name: Lint
+      run: |
+        black traefik_adguard_auto_rewrites.py tests --check
+        ruff check traefik_adguard_auto_rewrites.py tests
+        mypy traefik_adguard_auto_rewrites.py tests
+
+  e2e-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+    - name: Install Python dependencies
+      run: pip install -r dev-requirements.txt
+    - name: Run test
+      run: pytest -v
