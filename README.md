@@ -1,6 +1,6 @@
 # Traefik AdGuard Auto Rewrites
 
-Automatically sync Traefik host rules to AdGuard Home DNS rewrites for seamless local domain resolution in your homelab or development environment.
+Automatically create AdGuard Home Rewrite Rules based on Traefik host rules labels for seamless local domain resolution in your homelab or development environment.
 
 ## What it does
 
@@ -12,26 +12,23 @@ For example, if you have a container with `traefik.http.routers.myapp.rule=Host(
 
 - Automatic synchronization between Traefik and AdGuard Home
 - Real-time updates when containers start, stop, or change
-- IP target override per container
-- Persistent state storage
+- Configure a default target value for all containers or override per specific container
+- Persistent state storage which means it will only manage entires it created
 
 ## Installation
 
 ### Docker Compose
 
 ```yaml
-version: '3'
-
 services:
   traefik-adguard-sync:
-    image: yourrepo/traefik-adguard-auto-rewrites:latest
+    image: ghcr.io/simoncaron/traefik-adguard-auto-rewrites:latest
     container_name: traefik-adguard-sync
     environment:
-      - ADGUARD_USERNAME=your_adguard_username
-      - ADGUARD_PASSWORD=your_adguard_password
-      - ADGUARD_API_URL=http://adguard:3000/control
-      - DEFAULT_DNS_RECORD_TARGET=192.168.1.100
-      - LOGGING_LEVEL=INFO
+      ADGUARD_USERNAME: your_adguard_username
+      ADGUARD_PASSWORD: your_adguard_password
+      ADGUARD_API_URL: http://adguard:3000/control
+      DEFAULT_DNS_RECORD_TARGET: 192.168.1.100
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./state:/state
@@ -94,7 +91,7 @@ labels:
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.11+
 - Docker
 - AdGuard Home instance
 
@@ -110,16 +107,6 @@ docker build -t traefik-adguard-auto-rewrites .
 pip install -r requirements-dev.txt
 pytest
 ```
-
-## Troubleshooting
-
-Check the logs for detailed information:
-
-```bash
-docker logs traefik-adguard-sync
-```
-
-Increase verbosity by setting `LOGGING_LEVEL=DEBUG`.
 
 ## License
 
