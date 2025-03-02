@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 from base64 import b64encode
 from unittest import mock
 
@@ -7,71 +8,8 @@ import docker
 import pytest
 import requests
 
-# We need to mock the docker client before importing the script
-# Create a mock for docker.DockerClient
-mock_docker_client = mock.MagicMock()
-docker.DockerClient = mock.MagicMock(return_value=mock_docker_client)
-
 # Now import the module after mocking Docker
 import traefik_adguard_auto_rewrites as script
-
-
-@pytest.fixture(autouse=True)
-def prevent_actual_docker_usage():
-    """Fixture to prevent actual Docker API calls"""
-    with mock.patch("docker.DockerClient", return_value=mock_docker_client):
-        yield
-
-
-@pytest.fixture
-def mock_requests():
-    """Mock requests library fixture"""
-    with mock.patch("requests.get") as mock_get, mock.patch(
-        "requests.post"
-    ) as mock_post:
-        yield mock_get, mock_post
-
-
-@pytest.fixture
-def temp_state_file(tmpdir):
-    """Create a temporary state file for testing"""
-    state_file = tmpdir.join("test_state.json")
-    original_path = script.state_file_path
-    script.state_file_path = str(state_file)
-    yield state_file
-    script.state_file_path = original_path
-
-
-@pytest.fixture
-def sample_container():
-    """Create a sample container mock"""
-    container = mock.Mock()
-    container.id = "test_container_id"
-    container.labels = {
-        "traefik.http.routers.app.rule": "Host(`example.com`)",
-        "adguard.dns.target.override": "192.168.1.100",
-    }
-    return container
-
-
-@pytest.fixture(autouse=True)
-def setup_environment():
-    """Set up environment variables for testing"""
-    with mock.patch.dict(
-        os.environ,
-        {
-            "ADGUARD_USERNAME": "test_user",
-            "ADGUARD_PASSWORD": "test_pass",
-            "DEFAULT_DNS_RECORD_TARGET": "192.168.1.100",
-            "ADGUARD_API_URL": "http://test-adguard:3000/control",
-        },
-    ):
-        # Update script variables from environment
-        script.adguard_username = os.environ["ADGUARD_USERNAME"]
-        script.adguard_password = os.environ["ADGUARD_PASSWORD"]
-        script.default_dns_record_target = os.environ["DEFAULT_DNS_RECORD_TARGET"]
-        script.adguard_api_url = os.environ["ADGUARD_API_URL"]
-        yield
 
 
 def test_get_auth_header():
@@ -116,7 +54,7 @@ def test_flush_list(temp_state_file):
 
     assert temp_state_file.exists()
     content = json.loads(temp_state_file.read())
-    assert {tuple(x) for x in content} == script.global_list
+    assert set(tuple(x) for x in content) == script.global_list
 
 
 def test_read_state_existing_file(temp_state_file):
@@ -327,7 +265,7 @@ def test_process_container_labels_with_complex_rule():
     }
 
 
-def test_initial_sync():
+def test_initial_sync(mock_docker_client):
     """Test initial_sync function"""
     # Setup mock containers
     container1 = mock.Mock()
@@ -361,6 +299,141 @@ def test_initial_sync():
             ("example.com", "192.168.1.100")
         }
         assert script.container_records["container2"] == {("test.com", "192.168.1.100")}
+
+        # Check handle_list was called with correct arguments
+        expected_records = {
+            ("example.com", "192.168.1.100"),
+            ("test.com", "192.168.1.100"),
+        }
+        mock_list_existing.assert_called_once()
+        mock_handle_list.assert_called_once()
+        args = mock_handle_list.call_args[0]
+        assert args[0] == expected_records
+
+
+def test_handle_container_event_start(mock_docker_client):
+    """Test handle_container_event for container start event"""
+    # Setup mock container
+    container = mock.Mock()
+    container.id = "test_container"
+    container.labels = {"traefik.http.routers.app.rule": "Host(`example.com`)"}
+
+    # Setup container get return
+    mock_docker_client.containers.get.return_value = container
+
+    # Clear state
+    script.container_records = {}
+
+    # Create event
+    event = {"id": "test_container", "Action": "start"}
+
+    # Mock sync_records function
+    with mock.patch("traefik_adguard_auto_rewrites.sync_records") as mock_sync:
+        script.handle_container_event(event)
+
+        # Check container records updated
+        assert "test_container" in script.container_records
+        assert script.container_records["test_container"] == {
+            ("example.com", "192.168.1.100")
+        }
+
+        # Verify sync_records was called
+        mock_sync.assert_called_once()
+
+
+def test_handle_container_event_stop():
+    """Test handle_container_event for container stop event"""
+    # Setup initial container records
+    script.container_records = {"test_container": {("example.com", "192.168.1.100")}}
+
+    # Create stop event
+    event = {"id": "test_container", "Action": "stop"}
+
+    # Mock sync_records function
+    with mock.patch("traefik_adguard_auto_rewrites.sync_records") as mock_sync:
+        script.handle_container_event(event)
+
+        # Check container records removed
+        assert "test_container" not in script.container_records
+
+        # Verify sync_records was called
+        mock_sync.assert_called_once()
+
+
+def test_handle_container_event_update(mock_docker_client):
+    """Test handle_container_event for container update event"""
+    # Setup initial container records
+    script.container_records = {
+        "test_container": {("old.example.com", "192.168.1.100")}
+    }
+
+    # Setup mock updated container
+    container = mock.Mock()
+    container.id = "test_container"
+    container.labels = {"traefik.http.routers.app.rule": "Host(`new.example.com`)"}
+    mock_docker_client.containers.get.return_value = container
+
+    # Create update event
+    event = {"id": "test_container", "Action": "update"}
+
+    # Mock sync_records function
+    with mock.patch("traefik_adguard_auto_rewrites.sync_records") as mock_sync:
+        script.handle_container_event(event)
+
+        # Check container records updated
+        assert script.container_records["test_container"] == {
+            ("new.example.com", "192.168.1.100")
+        }
+
+        # Verify sync_records was called
+        mock_sync.assert_called_once()
+
+
+def test_handle_container_event_exception(mock_docker_client):
+    """Test exception handling in handle_container_event"""
+    # Force an exception when getting container
+    mock_docker_client.containers.get.side_effect = docker.errors.NotFound(
+        "Container not found"
+    )
+
+    # Create event
+    event = {"id": "test_container", "Action": "start"}
+
+    # The function should not raise an exception
+    script.handle_container_event(event)
+
+    # Reset side effect for other tests
+    mock_docker_client.containers.get.side_effect = None
+
+
+def test_process_container_no_host_labels():
+    """Test process_container_labels with no Host rules"""
+    container = mock.Mock()
+    container.id = "test_container_id"
+    container.labels = {
+        "traefik.http.routers.app.rule": "Path(`/test`)",
+        "other.label": "value",
+    }
+
+    result = script.process_container_labels(container)
+    assert result == set()
+
+
+def test_sync_records():
+    """Test sync_records function"""
+    # Setup container records
+    script.container_records = {
+        "container1": {("example.com", "192.168.1.100")},
+        "container2": {("test.com", "192.168.1.100")},
+    }
+
+    # Mock list_existing and handle_list
+    with mock.patch(
+        "traefik_adguard_auto_rewrites.list_existing", return_value=set()
+    ) as mock_list_existing, mock.patch(
+        "traefik_adguard_auto_rewrites.handle_list"
+    ) as mock_handle_list:
+        script.sync_records()
 
         # Check handle_list was called with correct arguments
         expected_records = {
