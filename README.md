@@ -1,0 +1,126 @@
+# Traefik AdGuard Auto Rewrites
+
+Automatically sync Traefik host rules to AdGuard Home DNS rewrites for seamless local domain resolution in your homelab or development environment.
+
+## What it does
+
+This tool monitors Docker containers with Traefik labels and automatically creates corresponding DNS rewrites in AdGuard Home. This solves the common problem of accessing local services by domain name without manually configuring DNS entries.
+
+For example, if you have a container with `traefik.http.routers.myapp.rule=Host(\`myapp.local\`)`, this tool will automatically create a DNS rewrite in AdGuard Home pointing `myapp.local` to your defined IP address.
+
+## Features
+
+- Automatic synchronization between Traefik and AdGuard Home
+- Real-time updates when containers start, stop, or change
+- IP target override per container
+- Persistent state storage
+
+## Installation
+
+### Docker Compose
+
+```yaml
+version: '3'
+
+services:
+  traefik-adguard-sync:
+    image: yourrepo/traefik-adguard-auto-rewrites:latest
+    container_name: traefik-adguard-sync
+    environment:
+      - ADGUARD_USERNAME=your_adguard_username
+      - ADGUARD_PASSWORD=your_adguard_password
+      - ADGUARD_API_URL=http://adguard:3000/control
+      - DEFAULT_DNS_RECORD_TARGET=192.168.1.100
+      - LOGGING_LEVEL=INFO
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./state:/state
+    restart: unless-stopped
+```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ADGUARD_USERNAME` | AdGuard Home username | (Required) |
+| `ADGUARD_PASSWORD` | AdGuard Home password | (Required) |
+| `ADGUARD_API_URL` | URL to AdGuard Home API | `http://adguard:3000/control` |
+| `DEFAULT_DNS_RECORD_TARGET` | Default IP for DNS records | (Required) |
+| `DOCKER_HOST` | Docker daemon socket | `unix://var/run/docker.sock` |
+| `LOGGING_LEVEL` | Log verbosity (DEBUG, INFO, WARNING, ERROR) | `INFO` |
+| `STATE_FILE` | Path to state file | `/state/adguard.state` |
+
+## Usage
+
+### Container Labels
+
+To have domains automatically added to AdGuard Home DNS rewrites, add standard Traefik Host rules to your containers:
+
+```yaml
+labels:
+  - "traefik.http.routers.myapp.rule=Host(`app.local`)"
+```
+
+To override the target IP for a specific container (instead of using the valude set for `DEFAULT_DNS_RECORD_TARGET`):
+
+```yaml
+labels:
+  - "traefik.http.routers.myapp.rule=Host(`app.local`)"
+  - "adguard.dns.target.override=192.168.1.150"
+```
+
+The tool supports multiple domains in a single rule:
+
+```yaml
+labels:
+  - "traefik.http.routers.myapp.rule=Host(`app.local`, `www.app.local`)"
+```
+
+And complex rules with Host directives:
+
+```yaml
+labels:
+  - "traefik.http.routers.myapp.rule=Host(`app.local`) || Path(`/api`)"
+```
+
+## How It Works
+
+1. On startup, the tool scans all running containers for Traefik Host rules
+2. It extracts domain names from the rules and creates DNS rewrites in AdGuard Home
+3. It listens for Docker events (container start/stop/update) and updates DNS rewrites accordingly
+4. The state is persisted to disk, allowing for clean restarts
+
+## Development
+
+### Requirements
+
+- Python 3.10+
+- Docker
+- AdGuard Home instance
+
+### Building
+
+```bash
+docker build -t traefik-adguard-auto-rewrites .
+```
+
+### Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+## Troubleshooting
+
+Check the logs for detailed information:
+
+```bash
+docker logs traefik-adguard-sync
+```
+
+Increase verbosity by setting `LOGGING_LEVEL=DEBUG`.
+
+## License
+
+MIT
