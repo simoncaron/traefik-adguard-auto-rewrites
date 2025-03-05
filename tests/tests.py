@@ -1,6 +1,5 @@
 import json
 import os
-import socket
 from base64 import b64encode
 from unittest import mock
 
@@ -33,14 +32,14 @@ def test_get_auth_header_missing_credentials():
             script.get_auth_header()
 
 
-def test_flush_list(temp_state_file):
-    """Test flush_list function"""
+def test_save_state(temp_state_file):
+    """Test save_state function"""
     script.global_list = {("example.com", "192.168.1.1"), ("test.com", "192.168.1.2")}
     script.save_state()
 
     assert temp_state_file.exists()
     content = json.loads(temp_state_file.read())
-    assert set(tuple(x) for x in content) == script.global_list
+    assert {tuple(x) for x in content} == script.global_list
 
 
 def test_read_state_existing_file(temp_state_file):
@@ -63,8 +62,8 @@ def test_read_state_no_file():
         assert script.global_list == set()
 
 
-def test_list_existing(mock_requests):
-    """Test list_existing function"""
+def test_list_existing_rewrite_rules(mock_requests):
+    """Test list_existing_rewrite_rules function"""
     mock_get, _ = mock_requests
     mock_response = mock.Mock()
     mock_response.json.return_value = [
@@ -81,8 +80,8 @@ def test_list_existing(mock_requests):
     mock_get.assert_called_once()
 
 
-def test_list_existing_error(mock_requests):
-    """Test list_existing function with an error"""
+def test_list_existing_rewrite_rules_error(mock_requests):
+    """Test list_existing_rewrite_rules function with an error"""
     mock_get, _ = mock_requests
     mock_get.side_effect = requests.RequestException("API Error")
 
@@ -90,8 +89,8 @@ def test_list_existing_error(mock_requests):
     assert result == set()
 
 
-def test_add_object_new(mock_requests):
-    """Test add_object function with a new record"""
+def test_add_rewrite_rule_new(mock_requests):
+    """Test add_rewrite_rule function with a new record"""
     _, mock_post = mock_requests
     mock_response = mock.Mock()
     mock_response.raise_for_status.return_value = None
@@ -106,8 +105,8 @@ def test_add_object_new(mock_requests):
     assert ("example.com", "192.168.1.1") in script.global_list
 
 
-def test_add_object_existing(mock_requests):
-    """Test add_object function with an existing record"""
+def test_add_rewrite_rule_existing(mock_requests):
+    """Test add_rewrite_rule function with an existing record"""
     _, mock_post = mock_requests
 
     existing = {("example.com", "192.168.1.1")}
@@ -119,8 +118,8 @@ def test_add_object_existing(mock_requests):
     assert ("example.com", "192.168.1.1") in script.global_list
 
 
-def test_add_object_error(mock_requests):
-    """Test add_object function with an error"""
+def test_add_rewrite_rule_error(mock_requests):
+    """Test add_rewrite_rule function with an error"""
     _, mock_post = mock_requests
     mock_post.side_effect = requests.RequestException("API Error")
 
@@ -133,8 +132,8 @@ def test_add_object_error(mock_requests):
     assert len(script.global_list) == 0
 
 
-def test_remove_object_existing(mock_requests):
-    """Test remove_object function with an existing record"""
+def test_remove_rewrite_rule_existing(mock_requests):
+    """Test remove_rewrite_rule function with an existing record"""
     _, mock_post = mock_requests
     mock_response = mock.Mock()
     mock_response.raise_for_status.return_value = None
@@ -149,8 +148,8 @@ def test_remove_object_existing(mock_requests):
     assert len(script.global_list) == 0
 
 
-def test_remove_object_not_existing(mock_requests):
-    """Test remove_object function with a non-existing record"""
+def test_remove_rewrite_rule_not_existing(mock_requests):
+    """Test remove_rewrite_rule function with a non-existing record"""
     _, mock_post = mock_requests
 
     existing = set()
@@ -162,8 +161,8 @@ def test_remove_object_not_existing(mock_requests):
     assert len(script.global_list) == 0
 
 
-def test_remove_object_error(mock_requests):
-    """Test remove_object function with an error"""
+def test_remove_rewrite_rule_error(mock_requests):
+    """Test remove_rewrite_rule function with an error"""
     _, mock_post = mock_requests
     mock_post.side_effect = requests.RequestException("API Error")
 
@@ -176,14 +175,14 @@ def test_remove_object_error(mock_requests):
     assert ("example.com", "192.168.1.1") in script.global_list
 
 
-def test_handle_list():
-    """Test handle_list function"""
-    with mock.patch("traefik_adguard_auto_rewrites.add_object") as mock_add, mock.patch(
-        "traefik_adguard_auto_rewrites.remove_object"
+def test_manage_rewrite_rules():
+    """Test manage_rewrite_rules function"""
+    with mock.patch("traefik_adguard_auto_rewrites.add_rewrite_rule") as mock_add, mock.patch(
+        "traefik_adguard_auto_rewrites.remove_rewrite_rule"
     ) as mock_remove, mock.patch(
         "traefik_adguard_auto_rewrites.print_state"
     ), mock.patch(
-        "traefik_adguard_auto_rewrites.flush_list"
+        "traefik_adguard_auto_rewrites.save_state"
     ):
         # Setup
         script.global_list = {
@@ -265,12 +264,12 @@ def test_initial_sync(mock_docker_client):
     # Set up mock container list
     mock_docker_client.containers.list.return_value = [container1, container2]
 
-    # Setup mock list_existing
+    # Setup mock list_existing_rewrite_rules
     with mock.patch(
-        "traefik_adguard_auto_rewrites.list_existing", return_value=set()
-    ) as mock_list_existing, mock.patch(
-        "traefik_adguard_auto_rewrites.handle_list"
-    ) as mock_handle_list:
+        "traefik_adguard_auto_rewrites.list_existing_rewrite_rules", return_value=set()
+    ) as mock_list_existing_rewrite_rules, mock.patch(
+        "traefik_adguard_auto_rewrites.manage_rewrite_rules"
+    ) as mock_manage_rewrite_rules:
         # Clear state
         script.global_list = set()
         script.container_records = {}
@@ -286,14 +285,14 @@ def test_initial_sync(mock_docker_client):
         }
         assert script.container_records["container2"] == {("test.com", "192.168.1.100")}
 
-        # Check handle_list was called with correct arguments
+        # Check manage_rewrite_rules was called with correct arguments
         expected_records = {
             ("example.com", "192.168.1.100"),
             ("test.com", "192.168.1.100"),
         }
-        mock_list_existing.assert_called_once()
-        mock_handle_list.assert_called_once()
-        args = mock_handle_list.call_args[0]
+        mock_list_existing_rewrite_rules.assert_called_once()
+        mock_manage_rewrite_rules.assert_called_once()
+        args = mock_manage_rewrite_rules.call_args[0]
         assert args[0] == expected_records
 
 
@@ -313,8 +312,8 @@ def test_handle_container_event_start(mock_docker_client):
     # Create event
     event = {"id": "test_container", "Action": "start"}
 
-    # Mock sync_records function
-    with mock.patch("traefik_adguard_auto_rewrites.sync_records") as mock_sync:
+    # Mock sync_rewrite_rules function
+    with mock.patch("traefik_adguard_auto_rewrites.sync_rewrite_rules") as mock_sync:
         script.handle_container_event(event)
 
         # Check container records updated
@@ -323,7 +322,7 @@ def test_handle_container_event_start(mock_docker_client):
             ("example.com", "192.168.1.100")
         }
 
-        # Verify sync_records was called
+        # Verify sync_rewrite_rules was called
         mock_sync.assert_called_once()
 
 
@@ -335,14 +334,14 @@ def test_handle_container_event_stop():
     # Create stop event
     event = {"id": "test_container", "Action": "stop"}
 
-    # Mock sync_records function
-    with mock.patch("traefik_adguard_auto_rewrites.sync_records") as mock_sync:
+    # Mock sync_rewrite_rules function
+    with mock.patch("traefik_adguard_auto_rewrites.sync_rewrite_rules") as mock_sync:
         script.handle_container_event(event)
 
         # Check container records removed
         assert "test_container" not in script.container_records
 
-        # Verify sync_records was called
+        # Verify sync_rewrite_rules was called
         mock_sync.assert_called_once()
 
 
@@ -362,8 +361,8 @@ def test_handle_container_event_update(mock_docker_client):
     # Create update event
     event = {"id": "test_container", "Action": "update"}
 
-    # Mock sync_records function
-    with mock.patch("traefik_adguard_auto_rewrites.sync_records") as mock_sync:
+    # Mock sync_rewrite_rules function
+    with mock.patch("traefik_adguard_auto_rewrites.sync_rewrite_rules") as mock_sync:
         script.handle_container_event(event)
 
         # Check container records updated
@@ -371,7 +370,7 @@ def test_handle_container_event_update(mock_docker_client):
             ("new.example.com", "192.168.1.100")
         }
 
-        # Verify sync_records was called
+        # Verify sync_rewrite_rules was called
         mock_sync.assert_called_once()
 
 
@@ -405,28 +404,28 @@ def test_process_container_no_host_labels():
     assert result == set()
 
 
-def test_sync_records():
-    """Test sync_records function"""
+def test_sync_rewrite_rules():
+    """Test sync_rewrite_rules function"""
     # Setup container records
     script.container_records = {
         "container1": {("example.com", "192.168.1.100")},
         "container2": {("test.com", "192.168.1.100")},
     }
 
-    # Mock list_existing and handle_list
+    # Mock list_existing_rewrite_rules and manage_rewrite_rules
     with mock.patch(
-        "traefik_adguard_auto_rewrites.list_existing", return_value=set()
-    ) as mock_list_existing, mock.patch(
-        "traefik_adguard_auto_rewrites.handle_list"
-    ) as mock_handle_list:
+        "traefik_adguard_auto_rewrites.list_existing_rewrite_rules", return_value=set()
+    ) as mock_list_existing_rewrite_rules, mock.patch(
+        "traefik_adguard_auto_rewrites.manage_rewrite_rules"
+    ) as mock_manage_rewrite_rules:
         script.sync_rewrite_rules()
 
-        # Check handle_list was called with correct arguments
+        # Check manage_rewrite_rules was called with correct arguments
         expected_records = {
             ("example.com", "192.168.1.100"),
             ("test.com", "192.168.1.100"),
         }
-        mock_list_existing.assert_called_once()
-        mock_handle_list.assert_called_once()
-        args = mock_handle_list.call_args[0]
+        mock_list_existing_rewrite_rules.assert_called_once()
+        mock_manage_rewrite_rules.assert_called_once()
+        args = mock_manage_rewrite_rules.call_args[0]
         assert args[0] == expected_records

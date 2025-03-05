@@ -1,17 +1,13 @@
-import json
 import os
-from base64 import b64encode
 from unittest import mock
 
 import pytest
-import requests
 
 # IMPORTANT: Mock Docker before importing docker module
 docker_patch = mock.patch("docker.DockerClient")
 mock_docker = docker_patch.start()
 
 # Now it's safe to import docker
-import docker
 
 # And now import the script
 import traefik_adguard_auto_rewrites as script
