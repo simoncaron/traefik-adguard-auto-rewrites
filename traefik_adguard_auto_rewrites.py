@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import socket
 import sys
 from base64 import b64encode
 from typing import Any
@@ -47,27 +46,14 @@ def get_auth_header() -> dict[str, str]:
     return {"Authorization": f"Basic {encoded}"}
 
 
-def ip_test(ip: str) -> tuple[bool, str]:
-    """Test if a string is a valid IP address"""
-    is_ip = False
-    try:
-        socket.inet_aton(ip)
-        is_ip = True
-    except Exception as ex:
-        template = "An exception of type {0} occurred. Arguments:\n{1!r}"
-        message = template.format(type(ex).__name__, ex.args)
-        logger.debug(message)
-    return is_ip, ip
-
-
-def flush_list() -> None:
+def save_state() -> None:
     """Save current state to file"""
     json_object = json.dumps(list(global_list), indent=2)
     with open(state_file_path, "w") as outfile:
         outfile.write(json_object)
 
 
-def read_state() -> None:
+def load_state() -> None:
     """Read state from file"""
     file_exists = os.path.exists(state_file_path)
     if file_exists:
@@ -90,7 +76,7 @@ def print_state() -> None:
     logger.debug("-----------")
 
 
-def list_existing() -> set:
+def list_existing_rewrite_rules() -> set:
     """Fetch current DNS rewrites from AdGuard Home"""
     try:
         response = requests.get(
@@ -110,7 +96,7 @@ def list_existing() -> set:
         return set()
 
 
-def add_object(obj: tuple[str, str], existing: set[tuple[str, str]]) -> None:
+def add_rewrite_rule(obj: tuple[str, str], existing: set[tuple[str, str]]) -> None:
     """Add a DNS rewrite to AdGuard Home"""
     domain, target = obj
     logger.info(f"Adding: {domain} -> {target}")
@@ -133,7 +119,7 @@ def add_object(obj: tuple[str, str], existing: set[tuple[str, str]]) -> None:
         logger.error(f"Failed to add DNS rewrite: {str(e)}")
 
 
-def remove_object(obj: tuple[str, str], existing: set[tuple[str, str]]) -> None:
+def remove_rewrite_rule(obj: tuple[str, str], existing: set[tuple[str, str]]) -> None:
     """Remove a DNS rewrite from AdGuard Home"""
     domain, target = obj
     logger.info(f"Removing: {domain} -> {target}")
@@ -156,7 +142,7 @@ def remove_object(obj: tuple[str, str], existing: set[tuple[str, str]]) -> None:
         logger.error(f"Failed to remove DNS rewrite: {str(e)}")
 
 
-def handle_list(
+def manage_rewrite_rules(
     new_global_list: set[tuple[str, str]], existing: set[tuple[str, str]]
 ) -> None:
     """Handle changes in DNS rewrites"""
@@ -165,22 +151,22 @@ def handle_list(
     to_sync = {x for x in global_list if x not in existing}
 
     if len(to_add) > 0:
-        logger.debug(f"Records to add: {to_add}")
+        logger.debug(f"Rewrite rule to add: {to_add}")
         for add in to_add:
-            add_object(add, existing)
+            add_rewrite_rule(add, existing)
 
     if len(to_remove) > 0:
-        logger.debug(f"Records to remove: {to_remove}")
+        logger.debug(f"Rewrite rule to remove: {to_remove}")
         for remove in to_remove:
-            remove_object(remove, existing)
+            remove_rewrite_rule(remove, existing)
 
     if len(to_sync) > 0:
-        logger.debug(f"Records to sync: {to_sync}")
+        logger.debug(f"Rewrite rule to sync: {to_sync}")
         for sync in to_sync - to_add - to_remove:
-            add_object(sync, existing)
+            add_rewrite_rule(sync, existing)
 
     print_state()
-    flush_list()
+    save_state()
 
 
 def process_container_labels(container: Container) -> set[tuple[str, str]]:
@@ -216,7 +202,7 @@ def initial_sync() -> None:
 
     logger.info("Performing initial synchronization...")
     containers = client.containers.list()
-    existing = list_existing()
+    existing = list_existing_rewrite_rules()
 
     for container in containers:
         records = process_container_labels(container)
@@ -228,60 +214,60 @@ def initial_sync() -> None:
     for records in container_records.values():
         new_global_list.update(records)
 
-    handle_list(new_global_list, existing)
+    manage_rewrite_rules(new_global_list, existing)
     logger.info("Initial synchronization completed")
 
 
-def handle_container_event(event: Any) -> None:
+def handle_container_event(container_event: Any) -> None:
     """Handle a Docker container event"""
     global container_records
 
     try:
-        container_id = event["id"]
-        action = event["Action"]
+        container_id = container_event["id"]
+        action = container_event["Action"]
         logger.debug(f"Container event: {action} for {container_id}")
 
         if action == "start":
-            # Container started - add its records
+            # Container started - add its rule
             container = client.containers.get(container_id)
             records = process_container_labels(container)
             if records:
                 container_records[container_id] = records
-                sync_records()
+                sync_rewrite_rules()
 
         elif action in ["die", "stop", "kill"]:
-            # Container stopped - remove its records
+            # Container stopped - remove its rule
             if container_id in container_records:
                 del container_records[container_id]
-                sync_records()
+                sync_rewrite_rules()
 
         elif action == "update":
-            # Container updated - refresh its records
+            # Container updated - refresh its rule
             container = client.containers.get(container_id)
             records = process_container_labels(container)
 
-            # Check if records changed
+            # Check if rule changed
             old_records = container_records.get(container_id, set())
             if records != old_records:
                 if records:
                     container_records[container_id] = records
                 else:
                     container_records.pop(container_id, None)
-                sync_records()
+                sync_rewrite_rules()
 
     except Exception as e:
         logger.error(f"Error handling container event: {e}")
 
 
-def sync_records() -> None:
+def sync_rewrite_rules() -> None:
     """Synchronize current container records with AdGuard Home"""
     # Combine all records from all containers
     new_global_list = set()
     for records in container_records.values():
         new_global_list.update(records)
 
-    existing = list_existing()
-    handle_list(new_global_list, existing)
+    existing = list_existing_rewrite_rules()
+    manage_rewrite_rules(new_global_list, existing)
 
 
 if __name__ == "__main__":
@@ -291,7 +277,7 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    read_state()
+    load_state()
     initial_sync()
 
     # Listen for Docker events

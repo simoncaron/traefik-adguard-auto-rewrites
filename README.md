@@ -4,9 +4,9 @@ Automatically create AdGuard Home Rewrite Rules based on Traefik host rules labe
 
 ## What it does
 
-This tool monitors Docker containers with Traefik labels and automatically creates corresponding DNS rewrites in AdGuard Home. This solves the common problem of accessing local services by domain name without manually configuring DNS entries.
+This tool monitors Docker containers with Traefik labels and automatically creates corresponding AdGuard rewrite rules in AdGuard Home.
 
-For example, if you have a container with `traefik.http.routers.myapp.rule=Host(\`myapp.local\`)`, this tool will automatically create a DNS rewrite in AdGuard Home pointing `myapp.local` to your defined IP address.
+For example, if you have a container with `traefik.http.routers.myapp.rule=Host(\`myapp.local\`)`, this tool will automatically create a rewrite rule in AdGuard Home pointing `myapp.local` to the default configured IP or to a specific IP (using the `adguard.dns.target.override` extra label).
 
 ## Features
 
@@ -37,15 +37,15 @@ services:
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ADGUARD_USERNAME` | AdGuard Home username | (Required) |
-| `ADGUARD_PASSWORD` | AdGuard Home password | (Required) |
-| `ADGUARD_API_URL` | URL to AdGuard Home API | `http://adguard:3000/control` |
-| `DEFAULT_DNS_RECORD_TARGET` | Default IP for DNS records | (Required) |
-| `DOCKER_HOST` | Docker daemon socket | `unix://var/run/docker.sock` |
+| Variable | Description                               | Default |
+|----------|-------------------------------------------|---------|
+| `ADGUARD_USERNAME` | AdGuard Home username                     | (Required) |
+| `ADGUARD_PASSWORD` | AdGuard Home password                     | (Required) |
+| `ADGUARD_API_URL` | URL to AdGuard Home API                   | `http://adguard:3000/control` |
+| `DEFAULT_DNS_RECORD_TARGET` | Default IP for Rewrite Rules              | (Required) |
+| `DOCKER_HOST` | Docker daemon socket                      | `unix://var/run/docker.sock` |
 | `LOGGING_LEVEL` | Log verbosity (DEBUG, INFO, WARNING, ERROR) | `INFO` |
-| `STATE_FILE` | Path to state file | `/state/adguard.state` |
+| `STATE_FILE` | Path to state file                        | `/state/adguard.state` |
 
 ## Usage
 
@@ -107,6 +107,10 @@ docker build -t traefik-adguard-auto-rewrites .
 pip install -r requirements-dev.txt
 pytest
 ```
+## Credits
+
+- Script inspired by @theonlysinjin Pi-Hole DNS Shim [docker-pihole-dns-shim](https://github.com/theonlysinjin/docker-pihole-dns-shim)
+- Repo structure and CI based on @RealOrangeOne [docker-db-auto-backup](https://github.com/RealOrangeOne/docker-db-auto-backup)
 
 ## License
 

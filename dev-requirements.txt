@@ -1,6 +1,5 @@
 black==23.12.1
 ruff==0.0.256
-mypy==1.9.0
 types-requests
 pytest==7.4.4
 docker==7.1.0

@@ -33,24 +33,10 @@ def test_get_auth_header_missing_credentials():
             script.get_auth_header()
 
 
-def test_ip_test_valid():
-    """Test ip_test function with valid IP"""
-    is_ip, ip = script.ip_test("192.168.1.1")
-    assert is_ip is True
-    assert ip == "192.168.1.1"
-
-
-def test_ip_test_invalid():
-    """Test ip_test function with invalid IP"""
-    is_ip, ip = script.ip_test("not-an-ip")
-    assert is_ip is False
-    assert ip == "not-an-ip"
-
-
 def test_flush_list(temp_state_file):
     """Test flush_list function"""
     script.global_list = {("example.com", "192.168.1.1"), ("test.com", "192.168.1.2")}
-    script.flush_list()
+    script.save_state()
 
     assert temp_state_file.exists()
     content = json.loads(temp_state_file.read())
@@ -63,7 +49,7 @@ def test_read_state_existing_file(temp_state_file):
     temp_state_file.write(json.dumps(test_data))
 
     script.global_list = set()
-    script.read_state()
+    script.load_state()
 
     expected = {("example.com", "192.168.1.1"), ("test.com", "192.168.1.2")}
     assert script.global_list == expected
@@ -73,7 +59,7 @@ def test_read_state_no_file():
     """Test read_state function with no file"""
     with mock.patch("os.path.exists", return_value=False):
         script.global_list = set()
-        script.read_state()
+        script.load_state()
         assert script.global_list == set()
 
 
@@ -88,7 +74,7 @@ def test_list_existing(mock_requests):
     mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
 
-    result = script.list_existing()
+    result = script.list_existing_rewrite_rules()
     expected = {("example.com", "192.168.1.1"), ("test.com", "192.168.1.2")}
 
     assert result == expected
@@ -100,7 +86,7 @@ def test_list_existing_error(mock_requests):
     mock_get, _ = mock_requests
     mock_get.side_effect = requests.RequestException("API Error")
 
-    result = script.list_existing()
+    result = script.list_existing_rewrite_rules()
     assert result == set()
 
 
@@ -114,7 +100,7 @@ def test_add_object_new(mock_requests):
     existing = {("other.com", "192.168.1.3")}
     script.global_list = set()
 
-    script.add_object(("example.com", "192.168.1.1"), existing)
+    script.add_rewrite_rule(("example.com", "192.168.1.1"), existing)
 
     mock_post.assert_called_once()
     assert ("example.com", "192.168.1.1") in script.global_list
@@ -127,7 +113,7 @@ def test_add_object_existing(mock_requests):
     existing = {("example.com", "192.168.1.1")}
     script.global_list = set()
 
-    script.add_object(("example.com", "192.168.1.1"), existing)
+    script.add_rewrite_rule(("example.com", "192.168.1.1"), existing)
 
     mock_post.assert_not_called()
     assert ("example.com", "192.168.1.1") in script.global_list
@@ -141,7 +127,7 @@ def test_add_object_error(mock_requests):
     existing = set()
     script.global_list = set()
 
-    script.add_object(("example.com", "192.168.1.1"), existing)
+    script.add_rewrite_rule(("example.com", "192.168.1.1"), existing)
 
     mock_post.assert_called_once()
     assert len(script.global_list) == 0
@@ -157,7 +143,7 @@ def test_remove_object_existing(mock_requests):
     existing = {("example.com", "192.168.1.1")}
     script.global_list = {("example.com", "192.168.1.1")}
 
-    script.remove_object(("example.com", "192.168.1.1"), existing)
+    script.remove_rewrite_rule(("example.com", "192.168.1.1"), existing)
 
     mock_post.assert_called_once()
     assert len(script.global_list) == 0
@@ -170,7 +156,7 @@ def test_remove_object_not_existing(mock_requests):
     existing = set()
     script.global_list = {("example.com", "192.168.1.1")}
 
-    script.remove_object(("example.com", "192.168.1.1"), existing)
+    script.remove_rewrite_rule(("example.com", "192.168.1.1"), existing)
 
     mock_post.assert_not_called()
     assert len(script.global_list) == 0
@@ -184,7 +170,7 @@ def test_remove_object_error(mock_requests):
     existing = {("example.com", "192.168.1.1")}
     script.global_list = {("example.com", "192.168.1.1")}
 
-    script.remove_object(("example.com", "192.168.1.1"), existing)
+    script.remove_rewrite_rule(("example.com", "192.168.1.1"), existing)
 
     mock_post.assert_called_once()
     assert ("example.com", "192.168.1.1") in script.global_list
@@ -213,7 +199,7 @@ def test_handle_list():
         existing = {("existing.com", "192.168.1.1")}
 
         # Test
-        script.handle_list(new_global_list, existing)
+        script.manage_rewrite_rules(new_global_list, existing)
 
         # Assertions
         mock_add.assert_called_with(("to_add.com", "192.168.1.3"), existing)
@@ -433,7 +419,7 @@ def test_sync_records():
     ) as mock_list_existing, mock.patch(
         "traefik_adguard_auto_rewrites.handle_list"
     ) as mock_handle_list:
-        script.sync_records()
+        script.sync_rewrite_rules()
 
         # Check handle_list was called with correct arguments
         expected_records = {
