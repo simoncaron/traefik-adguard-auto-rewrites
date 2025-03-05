@@ -177,7 +177,9 @@ def test_remove_rewrite_rule_error(mock_requests):
 
 def test_manage_rewrite_rules():
     """Test manage_rewrite_rules function"""
-    with mock.patch("traefik_adguard_auto_rewrites.add_rewrite_rule") as mock_add, mock.patch(
+    with mock.patch(
+        "traefik_adguard_auto_rewrites.add_rewrite_rule"
+    ) as mock_add, mock.patch(
         "traefik_adguard_auto_rewrites.remove_rewrite_rule"
     ) as mock_remove, mock.patch(
         "traefik_adguard_auto_rewrites.print_state"
