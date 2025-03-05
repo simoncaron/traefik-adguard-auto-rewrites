@@ -1,5 +1,8 @@
 # Traefik AdGuard Auto Rewrites
 
+![CI](https://github.com/simoncaron/traefik-adguard-auto-rewrites/actions/workflows/ci.yml/badge.svg)
+![Release](https://github.com/simoncaron/traefik-adguard-auto-rewrites/actions/workflows/release.yml/badge.svg)
+
 Automatically create AdGuard Home Rewrite Rules based on Traefik host rules labels for seamless local domain resolution in your homelab or development environment.
 
 ## What it does
@@ -109,8 +112,8 @@ pytest
 ```
 ## Credits
 
-- Script inspired by @theonlysinjin Pi-Hole DNS Shim [docker-pihole-dns-shim](https://github.com/theonlysinjin/docker-pihole-dns-shim)
-- Repo structure and CI based on @RealOrangeOne [docker-db-auto-backup](https://github.com/RealOrangeOne/docker-db-auto-backup)
+- Script inspired by [@theonlysinjin](https://github.com/theonlysinjin) [docker-pihole-dns-shim](https://github.com/theonlysinjin/docker-pihole-dns-shim)
+- Repo structure and CI based on [@RealOrangeOne](https://github.com/RealOrangeOne) [docker-db-auto-backup](https://github.com/RealOrangeOne/docker-db-auto-backup)
 
 ## License
 
