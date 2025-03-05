@@ -6,7 +6,7 @@ Automatically create AdGuard Home Rewrite Rules based on Traefik host rules labe
 
 This tool monitors Docker containers with Traefik labels and automatically creates corresponding AdGuard rewrite rules in AdGuard Home.
 
-For example, if you have a container with `traefik.http.routers.myapp.rule=Host(\`myapp.local\`)`, this tool will automatically create a rewrite rule in AdGuard Home pointing `myapp.local` to the default configured IP or to a specific IP (using the `adguard.dns.target.override` extra label).
+For example, if you have a container with ``traefik.http.routers.myapp.rule=Host(`myapp.local`)``, this tool will automatically create a rewrite rule in AdGuard Home pointing `myapp.local` to the default configured IP or to a specific IP (using the `adguard.dns.target.override` extra label).
 
 ## Features
 
