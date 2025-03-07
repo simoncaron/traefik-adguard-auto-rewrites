@@ -37,6 +37,7 @@ global_list: set = set()
 container_records = {}
 pending_removals = {}
 container_domains = {}
+removal_scheduled = set()
 
 
 def get_auth_header() -> dict[str, str]:
@@ -242,11 +243,9 @@ def initial_sync() -> None:
     logger.info("Initial synchronization completed")
 
 
-def handle_container_event(
-    container_event: Any, removal_delay: int = removal_interval
-) -> None:
+def handle_container_event(container_event: Any, removal_delay: int = 30) -> None:
     """Handle a Docker container event"""
-    global container_records, pending_removals, container_domains
+    global container_records, pending_removals, container_domains, removal_scheduled
 
     try:
         container_id = container_event["id"]
@@ -257,6 +256,10 @@ def handle_container_event(
             # Container started - process its labels for DNS records
             container = client.containers.get(container_id)
             records = process_container_labels(container)
+
+            # Clear any scheduled removal flag for this container
+            if container_id in removal_scheduled:
+                removal_scheduled.remove(container_id)
 
             if records:
                 # Track domains for this container
@@ -276,8 +279,14 @@ def handle_container_event(
                 sync_rewrite_rules()
 
         elif action in ["die", "stop", "kill"]:
-            # Container stopped - schedule domain removal
-            if container_id in container_records and container_id in container_domains:
+            # Only process if container is in our records and not already scheduled for removal
+            if (
+                container_id in container_records
+                and container_id not in removal_scheduled
+            ):
+                # Mark container as having removal scheduled
+                removal_scheduled.add(container_id)
+
                 # Get domains used by this container
                 domains = container_domains.get(container_id, set())
 
@@ -307,6 +316,9 @@ def handle_container_event(
                             del container_domains[container_id]
                         sync_rewrite_rules()
 
+                    # Remove from scheduled set when done
+                    removal_scheduled.discard(container_id)
+
                 # Mark domains for pending removal
                 for domain in domains:
                     pending_removals[domain] = container_id
@@ -318,20 +330,10 @@ def handle_container_event(
                 timer = threading.Timer(removal_delay, delayed_domain_removal)
                 timer.daemon = True
                 timer.start()
-
-        elif action == "update":
-            # Container updated - refresh its rule
-            container = client.containers.get(container_id)
-            records = process_container_labels(container)
-
-            # Check if rule changed
-            old_records = container_records.get(container_id, set())
-            if records != old_records:
-                if records:
-                    container_records[container_id] = records
-                else:
-                    container_records.pop(container_id, None)
-                sync_rewrite_rules()
+            else:
+                logger.debug(
+                    f"Ignoring {action} event for container {container_id}, removal already scheduled"
+                )
 
     except Exception as e:
         logger.error(f"Error handling container event: {e}")

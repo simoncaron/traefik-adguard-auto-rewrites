@@ -351,35 +351,6 @@ def test_handle_container_event_stop():
         mock_sync.assert_called_once()
 
 
-def test_handle_container_event_update(mock_docker_client):
-    """Test handle_container_event for container update event"""
-    # Setup initial container records
-    script.container_records = {
-        "test_container": {("old.example.com", "192.168.1.100")}
-    }
-
-    # Setup mock updated container
-    container = mock.Mock()
-    container.id = "test_container"
-    container.labels = {"traefik.http.routers.app.rule": "Host(`new.example.com`)"}
-    mock_docker_client.containers.get.return_value = container
-
-    # Create update event
-    event = {"id": "test_container", "Action": "update"}
-
-    # Mock sync_rewrite_rules function
-    with mock.patch("traefik_adguard_auto_rewrites.sync_rewrite_rules") as mock_sync:
-        script.handle_container_event(event)
-
-        # Check container records updated
-        assert script.container_records["test_container"] == {
-            ("new.example.com", "192.168.1.100")
-        }
-
-        # Verify sync_rewrite_rules was called
-        mock_sync.assert_called_once()
-
-
 def test_handle_container_event_exception(mock_docker_client):
     """Test exception handling in handle_container_event"""
     # Force an exception when getting container
