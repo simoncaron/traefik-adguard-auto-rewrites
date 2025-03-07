@@ -355,7 +355,6 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    load_state()
     initial_sync()
 
     # Listen for Docker events
