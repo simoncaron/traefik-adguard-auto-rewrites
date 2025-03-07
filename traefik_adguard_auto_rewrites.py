@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from base64 import b64encode
 from typing import Any
 
@@ -14,6 +15,7 @@ docker_socket_url = os.getenv("DOCKER_HOST", "unix://var/run/docker.sock")
 default_dns_record_target = os.getenv("DEFAULT_DNS_RECORD_TARGET", "")
 adguard_username = os.getenv("ADGUARD_USERNAME", "")
 adguard_password = os.getenv("ADGUARD_PASSWORD", "")
+removal_interval = os.getenv("REWRITE_RULE_REMOVAL_DELAY", 30)
 adguard_api_url = os.getenv("ADGUARD_API_URL", "http://adguard:3000/control")
 state_file_path = os.getenv("STATE_FILE", "/state/adguard.state")
 
@@ -32,8 +34,9 @@ logger = logging.getLogger(__name__)
 # Global state
 global_list: set = set()
 
-# Container records mapping (container_id -> set of records)
 container_records = {}
+pending_removals = {}
+container_domains = {}
 
 
 def get_auth_header() -> dict[str, str]:
@@ -198,7 +201,7 @@ def process_container_labels(container: Container) -> set[tuple[str, str]]:
 
 def initial_sync() -> None:
     """Perform initial synchronization of all running containers"""
-    global container_records
+    global container_records, container_domains
 
     logger.info("Performing initial synchronization...")
     containers = client.containers.list()
@@ -208,19 +211,42 @@ def initial_sync() -> None:
         records = process_container_labels(container)
         if records:
             container_records[container.id] = records
+            # Track domains for each container
+            domains = {domain for domain, _ in records}
+            container_domains[container.id] = domains
 
-    # Combine all records from all containers
+    # Handle state file entries that might not have an associated container
+    load_state()
+
+    # Create a set of all domains from container records
+    active_domains = set()
+    for records in container_records.values():
+        active_domains.update(domain for domain, _ in records)
+
+    # Combine all records from all containers with state
     new_global_list = set()
     for records in container_records.values():
         new_global_list.update(records)
+
+    # Add state entries to container_domains with special ID
+    state_domains = {domain for domain, _ in global_list} - active_domains
+    if state_domains:
+        logger.info(
+            f"Found {len(state_domains)} domains in state file not associated with active containers"
+        )
+        container_domains["__state_file__"] = state_domains
+        # Keep these entries in the global list
+        new_global_list.update(global_list)
 
     manage_rewrite_rules(new_global_list, existing)
     logger.info("Initial synchronization completed")
 
 
-def handle_container_event(container_event: Any) -> None:
+def handle_container_event(
+    container_event: Any, removal_delay: int = removal_interval
+) -> None:
     """Handle a Docker container event"""
-    global container_records
+    global container_records, pending_removals, container_domains
 
     try:
         container_id = container_event["id"]
@@ -228,18 +254,70 @@ def handle_container_event(container_event: Any) -> None:
         logger.debug(f"Container event: {action} for {container_id}")
 
         if action == "start":
-            # Container started - add its rule
+            # Container started - process its labels for DNS records
             container = client.containers.get(container_id)
             records = process_container_labels(container)
+
             if records:
+                # Track domains for this container
+                domains = {domain for domain, _ in records}
+                container_domains[container_id] = domains
+
+                # Check if any of these domains were pending removal
+                for domain, _ in records:
+                    if domain in pending_removals:
+                        logger.info(
+                            f"Domain {domain} was pending removal but is now used by a new container"
+                        )
+                        pending_removals.pop(domain, None)
+
+                # Update container records and sync
                 container_records[container_id] = records
                 sync_rewrite_rules()
 
         elif action in ["die", "stop", "kill"]:
-            # Container stopped - remove its rule
-            if container_id in container_records:
-                del container_records[container_id]
-                sync_rewrite_rules()
+            # Container stopped - schedule domain removal
+            if container_id in container_records and container_id in container_domains:
+                # Get domains used by this container
+                domains = container_domains.get(container_id, set())
+
+                def delayed_domain_removal():
+                    logger.debug(
+                        f"Checking for domains to remove after delay for container {container_id}"
+                    )
+                    domains_to_remove = []
+
+                    # Check each domain to see if it's still pending removal
+                    for domain in domains:
+                        if (
+                            domain in pending_removals
+                            and pending_removals[domain] == container_id
+                        ):
+                            domains_to_remove.append(domain)
+                            pending_removals.pop(domain, None)
+
+                    if domains_to_remove:
+                        logger.info(
+                            f"Removing domains after delay: {domains_to_remove}"
+                        )
+                        # Remove container from records and sync
+                        if container_id in container_records:
+                            del container_records[container_id]
+                        if container_id in container_domains:
+                            del container_domains[container_id]
+                        sync_rewrite_rules()
+
+                # Mark domains for pending removal
+                for domain in domains:
+                    pending_removals[domain] = container_id
+
+                # Schedule removal after delay
+                logger.info(
+                    f"Container {container_id} {action}. Scheduling domain removal in {removal_delay} seconds"
+                )
+                timer = threading.Timer(removal_delay, delayed_domain_removal)
+                timer.daemon = True
+                timer.start()
 
         elif action == "update":
             # Container updated - refresh its rule

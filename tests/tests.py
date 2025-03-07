@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from base64 import b64encode
 from unittest import mock
 
@@ -338,7 +339,10 @@ def test_handle_container_event_stop():
 
     # Mock sync_rewrite_rules function
     with mock.patch("traefik_adguard_auto_rewrites.sync_rewrite_rules") as mock_sync:
-        script.handle_container_event(event)
+        script.handle_container_event(event, 2)
+
+        # Wait the deletion delay
+        time.sleep(5)
 
         # Check container records removed
         assert "test_container" not in script.container_records
