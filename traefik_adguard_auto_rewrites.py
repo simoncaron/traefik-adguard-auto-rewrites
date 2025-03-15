@@ -13,11 +13,12 @@ from docker.models.containers import Container
 # Environment variables
 docker_socket_url = os.getenv("DOCKER_HOST", "unix://var/run/docker.sock")
 default_dns_record_target = os.getenv("DEFAULT_DNS_RECORD_TARGET", "")
+removal_interval = os.getenv("REWRITE_RULE_REMOVAL_DELAY", 30)
+state_file_path = os.getenv("STATE_FILE", "/state/container_records.state")
+
 adguard_username = os.getenv("ADGUARD_USERNAME", "")
 adguard_password = os.getenv("ADGUARD_PASSWORD", "")
-removal_interval = os.getenv("REWRITE_RULE_REMOVAL_DELAY", 30)
 adguard_api_url = os.getenv("ADGUARD_API_URL", "http://adguard:3000/control")
-state_file_path = os.getenv("STATE_FILE", "/state/adguard.state")
 
 # Initialize Docker client
 client = docker.DockerClient(base_url=docker_socket_url)
@@ -34,9 +35,8 @@ logger = logging.getLogger(__name__)
 # Global state
 global_list: set = set()
 
-container_records = {}
-pending_removals = {}
-container_domains = {}
+container_data = {}
+domains_pending_removal = {}
 removal_scheduled = set()
 
 
@@ -173,8 +173,8 @@ def manage_rewrite_rules(
     save_state()
 
 
-def process_container_labels(container: Container) -> set[tuple[str, str]]:
-    """Process a container's labels and extract DNS records"""
+def process_container_labels(container: Container) -> set[tuple[str, str, str]]:
+    """Process a container's labels and extract DNS records with container ID"""
     records = set()
     host_ip = container.labels.get(
         "adguard.dns.target.override", default_dns_record_target
@@ -195,14 +195,14 @@ def process_container_labels(container: Container) -> set[tuple[str, str]]:
                         if domain.strip()
                     ]
                     for domain in domains:
-                        records.add((domain, host_ip))
+                        records.add((domain, host_ip, container.id))
 
     return records
 
 
 def initial_sync() -> None:
     """Perform initial synchronization of all running containers"""
-    global container_records, container_domains
+    global container_data
 
     logger.info("Performing initial synchronization...")
     containers = client.containers.list()
@@ -211,31 +211,34 @@ def initial_sync() -> None:
     for container in containers:
         records = process_container_labels(container)
         if records:
-            container_records[container.id] = records
-            # Track domains for each container
-            domains = {domain for domain, _ in records}
-            container_domains[container.id] = domains
+            container_data[container.id] = records
 
     # Handle state file entries that might not have an associated container
     load_state()
 
     # Create a set of all domains from container records
     active_domains = set()
-    for records in container_records.values():
-        active_domains.update(domain for domain, _ in records)
+    for records in container_data.values():
+        active_domains.update(domain for domain, _, _ in records)
 
-    # Combine all records from all containers with state
+    # Combine all records from all containers
     new_global_list = set()
-    for records in container_records.values():
-        new_global_list.update(records)
+    for records in container_data.values():
+        # Convert to (domain, target) tuples for compatibility with existing functions
+        new_global_list.update((domain, target) for domain, target, _ in records)
 
-    # Add state entries to container_domains with special ID
+    # Add state entries with special ID
     state_domains = {domain for domain, _ in global_list} - active_domains
     if state_domains:
         logger.info(
             f"Found {len(state_domains)} domains in state file not associated with active containers"
         )
-        container_domains["__state_file__"] = state_domains
+        # Add these to container_data with special ID
+        state_records = {(domain, target, "__state_file__") for domain, target in global_list
+                         if domain in state_domains}
+        if state_records:
+            container_data["__state_file__"] = state_records
+
         # Keep these entries in the global list
         new_global_list.update(global_list)
 
@@ -245,7 +248,7 @@ def initial_sync() -> None:
 
 def handle_container_event(container_event: Any, removal_delay: int = 30) -> None:
     """Handle a Docker container event"""
-    global container_records, pending_removals, container_domains, removal_scheduled
+    global container_data, domains_pending_removal, removal_scheduled
 
     try:
         container_id = container_event["id"]
@@ -262,33 +265,32 @@ def handle_container_event(container_event: Any, removal_delay: int = 30) -> Non
                 removal_scheduled.remove(container_id)
 
             if records:
-                # Track domains for this container
-                domains = {domain for domain, _ in records}
-                container_domains[container_id] = domains
+                # Update container records
+                container_data[container_id] = records
 
                 # Check if any of these domains were pending removal
-                for domain, _ in records:
-                    if domain in pending_removals:
+                domains = {domain for domain, _, _ in records}
+                for domain in domains:
+                    if domain in domains_pending_removal:
                         logger.info(
                             f"Domain {domain} was pending removal but is now used by a new container"
                         )
-                        pending_removals.pop(domain, None)
+                        domains_pending_removal.pop(domain, None)
 
-                # Update container records and sync
-                container_records[container_id] = records
+                # Sync rewrite rules
                 sync_rewrite_rules()
 
         elif action in ["die", "stop", "kill"]:
             # Only process if container is in our records and not already scheduled for removal
             if (
-                container_id in container_records
-                and container_id not in removal_scheduled
+                    container_id in container_data
+                    and container_id not in removal_scheduled
             ):
                 # Mark container as having removal scheduled
                 removal_scheduled.add(container_id)
 
                 # Get domains used by this container
-                domains = container_domains.get(container_id, set())
+                domains = {domain for domain, _, _ in container_data.get(container_id, set())}
 
                 def delayed_domain_removal():
                     logger.debug(
@@ -299,21 +301,19 @@ def handle_container_event(container_event: Any, removal_delay: int = 30) -> Non
                     # Check each domain to see if it's still pending removal
                     for domain in domains:
                         if (
-                            domain in pending_removals
-                            and pending_removals[domain] == container_id
+                                domain in domains_pending_removal
+                                and domains_pending_removal[domain] == container_id
                         ):
                             domains_to_remove.append(domain)
-                            pending_removals.pop(domain, None)
+                            domains_pending_removal.pop(domain, None)
 
                     if domains_to_remove:
                         logger.info(
                             f"Removing domains after delay: {domains_to_remove}"
                         )
                         # Remove container from records and sync
-                        if container_id in container_records:
-                            del container_records[container_id]
-                        if container_id in container_domains:
-                            del container_domains[container_id]
+                        if container_id in container_data:
+                            del container_data[container_id]
                         sync_rewrite_rules()
 
                     # Remove from scheduled set when done
@@ -321,7 +321,7 @@ def handle_container_event(container_event: Any, removal_delay: int = 30) -> Non
 
                 # Mark domains for pending removal
                 for domain in domains:
-                    pending_removals[domain] = container_id
+                    domains_pending_removal[domain] = container_id
 
                 # Schedule removal after delay
                 logger.info(
@@ -343,8 +343,9 @@ def sync_rewrite_rules() -> None:
     """Synchronize current container records with AdGuard Home"""
     # Combine all records from all containers
     new_global_list = set()
-    for records in container_records.values():
-        new_global_list.update(records)
+    for records in container_data.values():
+        # Convert to (domain, target) tuples for compatibility with existing functions
+        new_global_list.update((domain, target) for domain, target, _ in records)
 
     existing = list_existing_rewrite_rules()
     manage_rewrite_rules(new_global_list, existing)
